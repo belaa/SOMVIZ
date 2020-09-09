@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="SOMVIZ",
-    version="0.0.1",
+    version="0.0.2",
     author="Bela Abolfathi",
     author_email="babolfat@uci.edu",
     description="Tools for generating and visualizing self-organizing maps.",
