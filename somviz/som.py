@@ -1,6 +1,8 @@
 import abc
+import pathlib
 import numpy as np
 import matplotlib.pyplot as plt
+from astropy.table import Table
 
 class MapGeometry(abc.ABC):
 
@@ -138,27 +140,26 @@ class SelfOrganizingMap(object):
         self._mapgeom = mapgeom
 
     def find_bmu(self, data, return_distances=False):
-        # Calculate best-matching cell for all inputs simultaneously:
-        if len(data.shape) > 1:
-            #dx = data[:, :, np.newaxis] - self._weights
-            #distsq = np.sum(dx ** 2, axis=1)
-            #bmu = np.argmin(distsq, axis=1)
-            bmu = np.empty(len(data), dtype=int)
-            for i in range(len(data)):
-                dx = data[i].reshape(-1,1) - self._weights
+            # Calculate best-matching cell for all inputs simultaneously:
+            if len(data.shape) > 1:
+                #dx = data[:, :, np.newaxis] - self._weights
+                #distsq = np.sum(dx ** 2, axis=1)
+                #bmu = np.argmin(distsq, axis=1)
+                bmu = np.empty(len(data), dtype=int)
+                for i in range(len(data)):
+                    dx = data[i].reshape(-1,1) - self._weights
+                    distsq = np.sum(dx ** 2, axis=0)
+                    bmu[i] = np.argmin(distsq)
+            # Calculate best-matching cell for a single input:
+            elif len(data.shape) == 1:
+                dx = data.reshape(-1, 1) - self._weights
                 distsq = np.sum(dx ** 2, axis=0)
-                bmu[i] = np.argmin(distsq)
-        # Calculate best-matching cell for a single input:
-        elif len(data.shape) == 1:
-            dx = data.reshape(-1, 1) - self._weights
-            distsq = np.sum(dx ** 2, axis=0)
-            bmu = np.argmin(distsq)
-        # Find the map site with the smallest distance (largest dot product).
-        if return_distances: return(bmu, dx)
-        else: return(bmu)
-
+                bmu = np.argmin(distsq)
+            # Find the map site with the smallest distance (largest dot product).
+            if return_distances: return(bmu, dx)
+            else: return(bmu)
         
-    def fit(self, data, target, maxiter=100, eta=0.5, init='random', seed=123, somz=False):
+    def fit(self, data, target, maxiter=100, eta=0.5, init='random', seed=123, somz=False, save=True):
         
         rng = np.random.RandomState(seed)
 
@@ -237,7 +238,18 @@ class SelfOrganizingMap(object):
         ## Should be mean or median?
         self._target_vals = [np.mean(self._target_dist[i]) for i in range(self._mapgeom.size)]
         self._target_pred = np.array(self._target_vals)[self._indices]
+        # Determine frequency of each index on SOM resolution grid
+        self._counts = np.bincount(self._indices, minlength=(self._mapgeom.size))
 
+        if save:
+            # Save trained SOM cell elements
+            table = Table()
+            table['weights'] = self._weights.T
+            table['counts'] = self._counts
+            table['target_values'] = self._target_vals
+
+            pname = pathlib.Path(f'trained_som_{self._mapgeom.size}_{maxiter}_{D}_{N}.fits')
+            table.write(pname, format='fits', overwrite=True)
 
     def plot_u_matrix(self):
         
@@ -315,12 +327,10 @@ class SelfOrganizingMap(object):
     
         '''Plot number of data points mapped to each SOM cell.'''
 
-        # Determine frequency of each index on SOM resolution grid
-        counts = np.bincount(self._indices, minlength=(self._mapgeom.size))
-        self._counts = counts.reshape(self._mapgeom.shape)
+        counts = self._counts.reshape(self._mapgeom.shape)
 
         plt.figure(figsize=(10,7))
-        plt.imshow(self._counts, origin='lower', interpolation='none', 
+        plt.imshow(counts, origin='lower', interpolation='none', 
             cmap='viridis', norm=norm)
         plt.colorbar()
         plt.title('Number per SOM cell')
@@ -359,7 +369,7 @@ class SelfOrganizingMap(object):
         density = np.zeros((nbins, nbins))
 
         train_dist = self._target_dist
-        test_dat = self.table_to_array(data)
+        test_dat = table_to_array(data)
         best = self.find_bmu(test_dat)
         test_dist = [target[best == i] for i in range(self._mapgeom.size)]
 
@@ -409,10 +419,3 @@ class SelfOrganizingMap(object):
         plt.xlabel(r'$\AA$')
         plt.ylabel(r'$m_{AB}$')
         plt.show()
-                    
-        
-
-
-
-
-
