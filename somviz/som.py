@@ -3,6 +3,7 @@ import pathlib
 import hashlib
 import numpy as np
 import matplotlib.pyplot as plt
+from astropy.table import Table
 
 class MapGeometry(abc.ABC):
 
@@ -161,7 +162,6 @@ class SelfOrganizingMap(object):
             else: return(bmu)
         
     def fit(self, data, maxiter=100, eta=0.5, init='random', seed=123, somz=False, verbose=False, save=pathlib.Path.cwd()):
-        
         sig = get_signature(data, self._mapgeom.size, maxiter)
         pname_weights = save / pathlib.Path(f'trained_weights_{sig}.npy')
         pname_loss = save / pathlib.Path(f'loss_{sig}.npy')
@@ -422,10 +422,3 @@ class SelfOrganizingMap(object):
         plt.xlabel(r'$\AA$')
         plt.ylabel(r'$m_{AB}$')
         plt.show()
-                    
-        
-
-
-
-
-
