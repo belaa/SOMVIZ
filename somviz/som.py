@@ -1,4 +1,6 @@
 import abc
+import pathlib
+import hashlib
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -132,6 +134,12 @@ def table_to_array(data):
         data_arr[:,k] = data[name]
     return(data_arr)
 
+def get_signature(data, mapsize, maxiter):
+    """Build a ~unique signature for the numpy array X suitable for cache file names.
+    """
+    signature = np.concatenate((data.shape, np.argmin(data, axis=0), np.argmax(data, axis=0), (mapsize, maxiter)))
+    return hashlib.sha256(signature).hexdigest()
+
 class SelfOrganizingMap(object):
     
     def __init__(self, mapgeom):
@@ -140,104 +148,111 @@ class SelfOrganizingMap(object):
     def find_bmu(self, data, return_distances=False):
         # Calculate best-matching cell for all inputs simultaneously:
         if len(data.shape) > 1:
-            #dx = data[:, :, np.newaxis] - self._weights
-            #distsq = np.sum(dx ** 2, axis=1)
-            #bmu = np.argmin(distsq, axis=1)
-            bmu = np.empty(len(data), dtype=int)
-            for i in range(len(data)):
-                dx = data[i].reshape(-1,1) - self._weights
-                distsq = np.sum(dx ** 2, axis=0)
-                bmu[i] = np.argmin(distsq)
-        # Calculate best-matching cell for a single input:
+            dx = data[:,:,np.newaxis] - self._weights
+            distsq = np.sum(dx ** 2, axis=1)
+            bmu = np.argmin(distsq, axis=1)
+            return(bmu)
         elif len(data.shape) == 1:
+            # Calculate best-matching cell for a single input:
             dx = data.reshape(-1, 1) - self._weights
             distsq = np.sum(dx ** 2, axis=0)
             bmu = np.argmin(distsq)
-        # Find the map site with the smallest distance (largest dot product).
-        if return_distances: return(bmu, dx)
-        else: return(bmu)
-
+            if return_distances: return(bmu, dx, distsq)
+            else: return(bmu)
         
-    def fit(self, data, target, maxiter=100, eta=0.5, init='random', seed=123, somz=False):
+    def fit(self, data, maxiter=100, eta=0.5, init='random', seed=123, somz=False, verbose=False, save=pathlib.Path.cwd()):
         
-        rng = np.random.RandomState(seed)
+        sig = get_signature(data, self._mapgeom.size, maxiter)
+        pname_weights = save / pathlib.Path(f'trained_weights_{sig}.npy')
+        pname_loss = save / pathlib.Path(f'loss_{sig}.npy')
 
-        self.data = data
-        self.target = target
+        if np.logical_and(pname_weights.exists(), pname_loss.exists()):
+            self._weights = np.load(pname_weights).T
+            self._loss = np.load(pname_loss)
 
-        # Reformat data if not a numpy array.        
-        if type(self.data) is np.ndarray:
-            pass
-        else:   
-            self.data = table_to_array(self.data)
-        
-        N, D = self.data.shape
+        else:
 
-        # Store loss values for every epoch.
-        self._loss = np.empty(maxiter)
-        if init == 'random':
-            sigmas = np.std(self.data, axis=0)
-            if somz:
-                self._weights = (rng.rand(D, self._mapgeom.size)) + data[0][0]
-            else:
-                self._weights = sigmas.reshape(-1, 1) * rng.normal(size=(D, self._mapgeom.size))
+            rng = np.random.RandomState(seed)
+            self.data = data
+
+            # Reformat data if not a numpy array.        
+            if type(self.data) is np.ndarray:
+                pass
+            else:   
+                self.data = table_to_array(self.data)
             
-        else:
-            raise ValueError('Invalid init "{}".'.format(init))
+            N, D = self.data.shape
 
-        if somz:
-            tt = 0
-            sigma0 = np.max(self._mapgeom.separations)
-            sigma_single = np.min(self._mapgeom.separations[np.where(self._mapgeom.separations > 0.)])
-            aps = 0.8
-            ape = 0.5
-            nt = maxiter * N
-            for it in range(maxiter):
-                loss = 0.
-                alpha = aps * (ape / aps) ** (tt / nt)
-                sigma = sigma0 * (sigma_single / sigma0) ** (tt / nt)
-                index_random = rng.choice(N, N, replace=False)
-                for i in range(N):
-                    tt += 1
-                    inputs = self.data[index_random[i]]
-                    best = self.find_bmu(inputs)
-                    h = np.exp(-(self._mapgeom.separations[best] ** 2) / sigma ** 2)
-                    dx = inputs.reshape(-1, 1) - self._weights
-                    loss += np.sqrt(np.sum(dx ** 2, axis=0))[best]
-                    self._weights += alpha * h * dx
-                self._loss[it] = loss
-        else:
-            # Randomize data
-            rndm = rng.choice(np.arange(N), size=N, replace=False)
-            data = self.data[rndm]
-            # Calculate mean separation between grid points as a representative large scale.
-            large_scale = np.mean(self._mapgeom.separations)
-            for i in range(maxiter):
-                loss = 0.
-                learn_rate = eta ** (i / maxiter)
-                gauss_width = large_scale ** (1 - i / maxiter)
-                for j, x in enumerate(data):
-                    # Calculate the Euclidean data-space distance squared between x and
-                    # each map site's weight vector.
-                    bmu, dx = self.find_bmu(x, return_distances=True)
-                    distsq = np.sum(dx ** 2, axis=0)
-                    # The loss is the sum of smallest (data space) distances for each data point.
-                    loss += np.sqrt(distsq[bmu])
-                    # Update all weights (dz are map-space distances).
-                    dz = self._mapgeom.separations[bmu]
-                    self._weights += learn_rate * np.exp(-0.5 * (dz / gauss_width) ** 2) * dx
-                self._loss[i] = loss
-        
+            # Store loss values for every epoch.
+            self._loss = np.empty(maxiter)
+            if init == 'random':
+                sigmas = np.std(self.data, axis=0)
+                if somz:
+                    self._weights = (rng.rand(D, self._mapgeom.size)) + data[0][0]
+                else:
+                    self._weights = sigmas.reshape(-1, 1) * rng.normal(size=(D, self._mapgeom.size))
+                
+            else:
+                raise ValueError('Invalid init "{}".'.format(init))
+
+            if somz:
+                tt = 0
+                sigma0 = np.max(self._mapgeom.separations)
+                sigma_single = np.min(self._mapgeom.separations[np.where(self._mapgeom.separations > 0.)])
+                aps = 0.8
+                ape = 0.5
+                nt = maxiter * N
+                for it in range(maxiter):
+                    loss = 0.
+                    alpha = aps * (ape / aps) ** (tt / nt)
+                    sigma = sigma0 * (sigma_single / sigma0) ** (tt / nt)
+                    index_random = rng.choice(N, N, replace=False)
+                    for i in range(N):
+                        tt += 1
+                        inputs = self.data[index_random[i]]
+                        best = self.find_bmu(inputs)
+                        h = np.exp(-(self._mapgeom.separations[best] ** 2) / sigma ** 2)
+                        dx = inputs.reshape(-1, 1) - self._weights
+                        loss += np.sqrt(np.sum(dx ** 2, axis=0))[best]
+                        self._weights += alpha * h * dx
+                    self._loss[it] = loss
+            else:
+                # Randomize data
+                rndm = rng.choice(np.arange(N), size=N, replace=False)
+                data = self.data[rndm]
+                # Calculate mean separation between grid points as a representative large scale.
+                large_scale = np.mean(self._mapgeom.separations)
+                for i in range(maxiter):
+                    loss = 0.
+                    learn_rate = eta ** (i / maxiter)
+                    gauss_width = large_scale ** (1 - i / maxiter)
+                    for j, x in enumerate(data):
+                        # Calculate the Euclidean data-space distance squared between x and
+                        # each map site's weight vector.
+                        bmu, dx, distsq = self.find_bmu(x, return_distances=True)
+                        # The loss is the sum of smallest (data space) distances for each data point.
+                        loss += np.sqrt(distsq[bmu])
+                        # Update all weights (dz are map-space distances).
+                        dz = self._mapgeom.separations[bmu]
+                        self._weights += learn_rate * np.exp(-0.5 * (dz / gauss_width) ** 2) * dx
+                    self._loss[i] = loss
+
+            # Save trained SOM cell elements
+            np.save(pname_weights, self._weights.T)
+            np.save(pname_loss, self._loss)
+    
+    def map(self, data, target):
         ## TO DO: need to handle empty cells.
         ## Find cell each training vector belongs to
-        self._indices = self.find_bmu(self.data)
+        self._indices = self.find_bmu(data)
         ## Get distribution of feature values for each cell
-        self._feature_dist = [self.data[self._indices == i] for i in range(self._mapgeom.size)]
+        self._feature_dist = [data[self._indices == i] for i in range(self._mapgeom.size)]
         self._target_dist = [target[self._indices == i] for i in range(self._mapgeom.size)]
         ## Should be mean or median?
         self._target_vals = [np.mean(self._target_dist[i]) for i in range(self._mapgeom.size)]
         self._target_pred = np.array(self._target_vals)[self._indices]
-
+        # Determine frequency of each index on SOM resolution grid
+        self._counts = np.bincount(self._indices, minlength=(self._mapgeom.size))
 
     def plot_u_matrix(self):
         
@@ -315,12 +330,10 @@ class SelfOrganizingMap(object):
     
         '''Plot number of data points mapped to each SOM cell.'''
 
-        # Determine frequency of each index on SOM resolution grid
-        counts = np.bincount(self._indices, minlength=(self._mapgeom.size))
-        self._counts = counts.reshape(self._mapgeom.shape)
+        counts = self._counts.reshape(self._mapgeom.shape)
 
         plt.figure(figsize=(10,7))
-        plt.imshow(self._counts, origin='lower', interpolation='none', 
+        plt.imshow(counts, origin='lower', interpolation='none', 
             cmap='viridis', norm=norm)
         plt.colorbar()
         plt.title('Number per SOM cell')
@@ -359,7 +372,7 @@ class SelfOrganizingMap(object):
         density = np.zeros((nbins, nbins))
 
         train_dist = self._target_dist
-        test_dat = self.table_to_array(data)
+        test_dat = table_to_array(data)
         best = self.find_bmu(test_dat)
         test_dist = [target[best == i] for i in range(self._mapgeom.size)]
 
