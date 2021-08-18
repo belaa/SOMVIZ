@@ -254,7 +254,7 @@ class SelfOrganizingMap(object):
         # Determine frequency of each index on SOM resolution grid
         self._counts = np.bincount(self._indices, minlength=(self._mapgeom.size))
 
-    def plot_u_matrix(self):
+    def plot_u_matrix(self, save=None):
         
         ''' 
         Visualize the weights in two dimensions.
@@ -284,9 +284,11 @@ class SelfOrganizingMap(object):
 
         plt.figure(figsize=(10,7))
         plt.imshow(u_map, interpolation='none', origin='lower', cmap='viridis')
+        if save:
+            plt.savefig(save)
         plt.show()
 
-    def plot_rgb(self, features=None):
+    def plot_rgb(self, features=None, save=None):
 
         '''Visualize the weights on an RGB scale using only three features.
         If features isn't specified, then the first three features are used.
@@ -307,6 +309,8 @@ class SelfOrganizingMap(object):
         rgb_map = rgb.reshape(rows, cols, 3)
 
         plt.imshow(rgb_map, interpolation='none', origin='lower', cmap='viridis')
+        if save:
+            plt.savefig(save)
         plt.show()
 
     def map_to_som(self, data):
@@ -326,7 +330,7 @@ class SelfOrganizingMap(object):
         vals = np.array(self._target_vals)
         return(vals[best])
 
-    def plot_counts_per_cell(self, norm=None):
+    def plot_counts_per_cell(self, norm=None, save=None):
     
         '''Plot number of data points mapped to each SOM cell.'''
 
@@ -337,9 +341,11 @@ class SelfOrganizingMap(object):
             cmap='viridis', norm=norm)
         plt.colorbar()
         plt.title('Number per SOM cell')
+        if save:
+            plt.savefig(save)
         plt.show()
 
-    def plot_statistic(self, feature=None, statistic=np.nanmean, return_stat=False):
+    def plot_statistic(self, feature=None, statistic=np.nanmean, return_stat=False, save=None):
 
         ## To do: handle empty cells
 
@@ -354,6 +360,8 @@ class SelfOrganizingMap(object):
             diff = np.asarray([statistic(self._feature_dist[i] - self._weights.T[i], axis=0)[feature] for i in range(self._mapgeom.size)])
             im1 = axs[1].imshow(diff.reshape(self._mapgeom.shape), origin='lower', interpolation='none', cmap='viridis')
             fig.colorbar(im1, ax=axs[1])
+            if save:
+                plt.savefig(save)
             plt.show()
 
         else:
@@ -361,6 +369,8 @@ class SelfOrganizingMap(object):
             plt.figure(figsize=(10,7))
             plt.imshow(stat.reshape(self._mapgeom.shape), origin='lower', interpolation='none', cmap='viridis')
             plt.colorbar()
+            if save:
+                plt.savefig(save)
             plt.show()
             
         if return_stat:
@@ -386,7 +396,7 @@ class SelfOrganizingMap(object):
                     density[:, zbin] += nz * train_rho
         return(density)
     
-    def plot_sed(self, table, cell):
+    def plot_sed(self, table, cell, save=None):
         
         colnames = []
         for col in table.colnames:
@@ -421,4 +431,6 @@ class SelfOrganizingMap(object):
         plt.gca().invert_yaxis()
         plt.xlabel(r'$\AA$')
         plt.ylabel(r'$m_{AB}$')
+        if save:
+            plt.savefig(save)
         plt.show()
