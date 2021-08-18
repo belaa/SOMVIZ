@@ -145,6 +145,7 @@ class SelfOrganizingMap(object):
     
     def __init__(self, mapgeom):
         self._mapgeom = mapgeom
+        print('Testing')
 
     def find_bmu(self, data, return_distances=False):
         # Calculate best-matching cell for all inputs simultaneously:
