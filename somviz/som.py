@@ -145,7 +145,6 @@ class SelfOrganizingMap(object):
     
     def __init__(self, mapgeom):
         self._mapgeom = mapgeom
-        print('Testing')
 
     def find_bmu(self, data, return_distances=False):
         # Calculate best-matching cell for all inputs simultaneously:
@@ -197,6 +196,7 @@ class SelfOrganizingMap(object):
                 raise ValueError('Invalid init "{}".'.format(init))
 
             if somz:
+                print('Running SOMz mode...')
                 tt = 0
                 sigma0 = np.max(self._mapgeom.separations)
                 sigma_single = np.min(self._mapgeom.separations[np.where(self._mapgeom.separations > 0.)])
@@ -217,6 +217,8 @@ class SelfOrganizingMap(object):
                         loss += np.sqrt(np.sum(dx ** 2, axis=0))[best]
                         self._weights += alpha * h * dx
                     self._loss[it] = loss
+                    print('Just finished iter = {}'.format(it))
+
             else:
                 # Randomize data
                 rndm = rng.choice(np.arange(N), size=N, replace=False)
