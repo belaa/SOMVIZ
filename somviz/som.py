@@ -146,103 +146,125 @@ class SelfOrganizingMap(object):
     def __init__(self, mapgeom):
         self._mapgeom = mapgeom
 
-    def find_bmu(self, data, return_distances=False):
-        # Calculate best-matching cell for all inputs simultaneously:
-        if len(data.shape) > 1:
-            dx = data[:,:,np.newaxis] - self._weights
-            distsq = np.sum(dx ** 2, axis=1)
-            bmu = np.argmin(distsq, axis=1)
-            return(bmu)
-        elif len(data.shape) == 1:
-            # Calculate best-matching cell for a single input:
-            dx = data.reshape(-1, 1) - self._weights
-            distsq = np.sum(dx ** 2, axis=0)
-            bmu = np.argmin(distsq)
-            if return_distances: return(bmu, dx, distsq)
-            else: return(bmu)
+    def find_bmu(self, data, batchsize=1024, verbose=False):
+        """Find the best matching unit for each data sample.
+        Uses broadcasting in mini-batches so that the memory requirements
+        and speed can be traded off against each other by setting
+        the batchsize parameter.
+        """
+        N, D = data.shape
+        D2, W = self._weights.shape
+        assert D==D2
+        bmu = np.empty(N, int)
+        nbatch = (N + batchsize - 1 ) // batchsize
+        # Preallocate the fixed storage to use.
+        S = min(N, batchsize)
+        buf = np.empty((S, D, W), self._weights.dtype)
+        distsq = np.empty((S, W))
+        if verbose:
+            print(f'Using {(buf.nbytes + distsq.nbytes)/(1<<20):.1f} Mb with batchsize {batchsize}.')
+        # Loop over batches.
+        for ibatch in range(nbatch):
+            # Calculate the range of samples to use for this batch.
+            ilo = ibatch * batchsize
+            ihi = min(ilo + batchsize, N)
+            buf[:ihi-ilo] = data[ilo:ihi,:,np.newaxis]
+            buf -= self._weights
+            buf = np.power(buf, 2, out=buf)
+            distsq[:] = np.sum(buf, axis=1)
+            bmu[ilo:ihi] = np.argmin(distsq[:ihi-ilo], axis=1)
+        return bmu
         
-    def fit(self, data, maxiter=100, eta=0.5, init='random', seed=123, somz=False, verbose=False, save=pathlib.Path.cwd()):
-        sig = get_signature(data, self._mapgeom.size, maxiter)
-        pname_weights = save / pathlib.Path(f'trained_weights_{sig}.npy')
-        pname_loss = save / pathlib.Path(f'loss_{sig}.npy')
+    def fit(self, data, maxiter=100, iterfrac=0.1, eta=0.5, init='random', seed=123, somz=False, verbose=False, save=None, use_saved=True):
+        """
+        """
+        if save is not None:
+            save = pathlib.Path(save)
+            assert save.exists()
+            save_weights = save / 'weights.npy'
+            save_loss = save / 'loss.npy'
+            if use_saved and save_weights.exists() and save_loss.exists():            
+                print(f'Restoring weights and loss from {save}...')
+                self._weights = np.load(save_weights).T
+                self._loss = np.load(save_loss)
+                return
+             
+        rng = np.random.RandomState(seed)
+        self.data = np.asarray(data)
+        N, D = self.data.shape
 
-        if np.logical_and(pname_weights.exists(), pname_loss.exists()):
-            self._weights = np.load(pname_weights).T
-            self._loss = np.load(pname_loss)
+        batch_size = int(round(iterfrac * N))
+        print(f'Batch size is {batch_size}')
+
+        # Store loss values for every epoch.
+        self._loss = np.empty(maxiter)
+        if init == 'random':
+            if somz:
+                self._weights = (rng.rand(D, self._mapgeom.size)) + self.data[0,0]
+            else:
+                #sigmas = np.std(self.data, axis=0)
+                self._weights = np.std(self.data, axis=0, keepdims=True).T * rng.normal(size=(D, self._mapgeom.size))
 
         else:
+            raise ValueError('Invalid init "{}".'.format(init))
 
-            rng = np.random.RandomState(seed)
-            self.data = data
+        if somz:
+            print('Running SOMz mode...')
+            tt = 0
+            sigma0 = np.max(self._mapgeom.separations)
+            sigma_single = np.min(self._mapgeom.separations[np.where(self._mapgeom.separations > 0.)])
+            aps = 0.8
+            ape = 0.5
+            nt = maxiter * N
+            for it in range(maxiter):
+                loss = 0.
+                alpha = aps * (ape / aps) ** (tt / nt)
+                sigma = sigma0 * (sigma_single / sigma0) ** (tt / nt)
+                index_random = rng.choice(N, N, replace=False)
+                for i in range(N):
+                    tt += 1
+                    inputs = self.data[index_random[i]]
+                    best = self.find_bmu(inputs)
+                    h = np.exp(-(self._mapgeom.separations[best] ** 2) / sigma ** 2)
+                    dx = inputs.reshape(-1, 1) - self._weights
+                    loss += np.sqrt(np.sum(dx ** 2, axis=0))[best]
+                    self._weights += alpha * h * dx
+                self._loss[it] = loss
+                print('Just finished iter = {}'.format(it))
 
-            # Reformat data if not a numpy array.        
-            if type(self.data) is np.ndarray:
-                pass
-            else:   
-                self.data = table_to_array(self.data)
-            
-            N, D = self.data.shape
+        else:
+            # Calculate mean separation between grid points as a representative large scale.
+            large_scale = np.mean(self._mapgeom.separations)
+            for i in range(maxiter):
+                loss = 0.
+                # progress goes from 0 to 1 during the first half of maxiter, then stays at 1 for the second half.
+                progress = min(1, 2 * i / maxiter)                    
+                # learn_rates goes from 1 to eta during the first half, then stays at eta.
+                #learn_rate = eta ** progress
+                # gauss_width goes from large_scale to 1 during the first half, then stays at 1.
+                #gauss_width = large_scale ** (1 - progress)
+                learn_rate = eta ** (i / maxiter)
+                gauss_width = 0.5 * large_scale ** (1 - i / maxiter)
+                batch_idx = rng.choice(N, batch_size)
+                for j, x in enumerate(self.data[batch_idx]):
+                    # Calculate the Euclidean data-space distance squared between x and
+                    # each map site's weight vector.
+                    dx = x.reshape(-1, 1) - self._weights
+                    distsq = np.sum(dx ** 2, axis=0)
+                    bmu = np.argmin(distsq)
+                    # The loss is the sum of smallest (data space) distances for each data point.
+                    loss += np.sqrt(distsq[bmu])
+                    # Update all weights (dz are map-space distances).
+                    dz = self._mapgeom.separations[bmu]
+                    self._weights += learn_rate * np.exp(-0.5 * (dz / gauss_width) ** 2) * dx
+                self._loss[i] = loss
+                print(f'finished iter {i+1}/{maxiter} with loss {loss:.3f} (progress={progress:.2f})')
 
-            # Store loss values for every epoch.
-            self._loss = np.empty(maxiter)
-            if init == 'random':
-                sigmas = np.std(self.data, axis=0)
-                if somz:
-                    self._weights = (rng.rand(D, self._mapgeom.size)) + data[0][0]
-                else:
-                    self._weights = sigmas.reshape(-1, 1) * rng.normal(size=(D, self._mapgeom.size))
-                
-            else:
-                raise ValueError('Invalid init "{}".'.format(init))
-
-            if somz:
-                print('Running SOMz mode...')
-                tt = 0
-                sigma0 = np.max(self._mapgeom.separations)
-                sigma_single = np.min(self._mapgeom.separations[np.where(self._mapgeom.separations > 0.)])
-                aps = 0.8
-                ape = 0.5
-                nt = maxiter * N
-                for it in range(maxiter):
-                    loss = 0.
-                    alpha = aps * (ape / aps) ** (tt / nt)
-                    sigma = sigma0 * (sigma_single / sigma0) ** (tt / nt)
-                    index_random = rng.choice(N, N, replace=False)
-                    for i in range(N):
-                        tt += 1
-                        inputs = self.data[index_random[i]]
-                        best = self.find_bmu(inputs)
-                        h = np.exp(-(self._mapgeom.separations[best] ** 2) / sigma ** 2)
-                        dx = inputs.reshape(-1, 1) - self._weights
-                        loss += np.sqrt(np.sum(dx ** 2, axis=0))[best]
-                        self._weights += alpha * h * dx
-                    self._loss[it] = loss
-                    print('Just finished iter = {}'.format(it))
-
-            else:
-                # Randomize data
-                rndm = rng.choice(np.arange(N), size=N, replace=False)
-                data = self.data[rndm]
-                # Calculate mean separation between grid points as a representative large scale.
-                large_scale = np.mean(self._mapgeom.separations)
-                for i in range(maxiter):
-                    loss = 0.
-                    learn_rate = eta ** (i / maxiter)
-                    gauss_width = large_scale ** (1 - i / maxiter)
-                    for j, x in enumerate(data):
-                        # Calculate the Euclidean data-space distance squared between x and
-                        # each map site's weight vector.
-                        bmu, dx, distsq = self.find_bmu(x, return_distances=True)
-                        # The loss is the sum of smallest (data space) distances for each data point.
-                        loss += np.sqrt(distsq[bmu])
-                        # Update all weights (dz are map-space distances).
-                        dz = self._mapgeom.separations[bmu]
-                        self._weights += learn_rate * np.exp(-0.5 * (dz / gauss_width) ** 2) * dx
-                    self._loss[i] = loss
-
+        if save is not None:
             # Save trained SOM cell elements
-            np.save(pname_weights, self._weights.T)
-            np.save(pname_loss, self._loss)
+            np.save(save_weights, self._weights.T)
+            np.save(save_loss, self._loss)
+            print(f'Saved weights and loss to {save}')
     
     def map(self, data, target):
         ## TO DO: need to handle empty cells.
