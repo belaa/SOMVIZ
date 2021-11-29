@@ -220,17 +220,32 @@ class SelfOrganizingMap(object):
                 loss = 0.
                 alpha = aps * (ape / aps) ** (tt / nt)
                 sigma = sigma0 * (sigma_single / sigma0) ** (tt / nt)
-                index_random = rng.choice(N, N, replace=False)
-                for i in range(N):
-                    tt += 1
-                    inputs = self.data[index_random[i]]
-                    best = self.find_bmu(inputs)
+                batch_idx = rng.choice(N, batch_size)
+                for j, x in enumerate(self.data[batch_idx]):
+                    # Calculate the Euclidean data-space distance squared between x and
+                    # each map site's weight vector.
+                    dx = x.reshape(-1, 1) - self._weights
+                    distsq = np.sum(dx ** 2, axis=0)
+                    best = np.argmin(distsq)
                     h = np.exp(-(self._mapgeom.separations[best] ** 2) / sigma ** 2)
                     dx = inputs.reshape(-1, 1) - self._weights
                     loss += np.sqrt(np.sum(dx ** 2, axis=0))[best]
                     self._weights += alpha * h * dx
                 self._loss[it] = loss
                 print('Just finished iter = {}'.format(it))
+
+                """index_random = rng.choice(N, N, replace=False)
+                for i in range(N):
+                    tt += 1
+                    inputs = self.data[index_random[i]]
+                    ### make ssame as somviz mode below
+                    best = self.find_bmu(inputs)
+                    h = np.exp(-(self._mapgeom.separations[best] ** 2) / sigma ** 2)
+                    dx = inputs.reshape(-1, 1) - self._weights
+                    loss += np.sqrt(np.sum(dx ** 2, axis=0))[best]
+                    self._weights += alpha * h * dx
+                self._loss[it] = loss
+                print('Just finished iter = {}'.format(it))"""
 
         else:
             # Calculate mean separation between grid points as a representative large scale.
@@ -277,6 +292,7 @@ class SelfOrganizingMap(object):
         self._target_vals = [np.mean(self._target_dist[i]) for i in range(self._mapgeom.size)]
         self._target_pred = np.array(self._target_vals)[self._indices]
         # Determine frequency of each index on SOM resolution grid
+        # This doesn't need to be under map?
         self._counts = np.bincount(self._indices, minlength=(self._mapgeom.size))
 
     def plot_u_matrix(self, save=None):
