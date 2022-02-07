@@ -228,7 +228,6 @@ class SelfOrganizingMap(object):
                     distsq = np.sum(dx ** 2, axis=0)
                     best = np.argmin(distsq)
                     h = np.exp(-(self._mapgeom.separations[best] ** 2) / sigma ** 2)
-                    dx = inputs.reshape(-1, 1) - self._weights
                     loss += np.sqrt(np.sum(dx ** 2, axis=0))[best]
                     self._weights += alpha * h * dx
                 self._loss[it] = loss
